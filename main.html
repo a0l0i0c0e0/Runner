@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>スティックマン ランナー</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-touch-callout: none;
+        }
+        
+        body {
+            background: #f5f5f5;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+            touch-action: manipulation;
+        }
+        
+        #gameCanvas {
+            display: block;
+            background: #fff;
+            border: 1px solid #ddd;
+            touch-action: none;
+        }
+        
+        .ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #333;
+            font-size: 20px;
+            font-weight: bold;
+            z-index: 10;
+        }
+        
+        .menu {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(255,255,255,0.95);
+            padding: 40px;
+            border-radius: 10px;
+            text-align: center;
+            border: 2px solid #333;
+            z-index: 20;
+        }
+        
+        .menu h1 {
+            margin-bottom: 20px;
+            font-size: 32px;
+            color: #333;
+        }
+        
+        .menu p {
+            margin-bottom: 30px;
+            font-size: 18px;
+            color: #666;
+            line-height: 1.4;
+        }
+        
+        .btn {
+            background: #333;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 10px;
+            transition: background 0.2s;
+        }
+        
+        .btn:hover {
+            background: #555;
+        }
+        
+        .btn:active {
+            background: #222;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+    
+    <div class="ui">
+        距離: <span id="score">0</span>m　スピード: <span id="speed">2.0</span>x
+    </div>
+    
+    <div class="menu" id="startMenu">
+        <h1>🏃‍♂️ ランナー</h1>
+        <p>でこぼこの床を指で上下にドラッグして<br>平らに調整しよう！<br>棒人間がつまずかないように！</p>
+        <button class="btn" onclick="startGame()">スタート</button>
+    </div>
+    
+    <div class="menu" id="gameOverMenu" style="display: none;">
+        <h1>ゲームオーバー</h1>
+        <p>距離: <span id="finalScore">0</span>m</p>
+        <button class="btn" onclick="restart()">リトライ</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // キャンバス設定
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+        
+        // ゲーム変数
+        let gameRunning = false;
+        let gameState = 'menu';
+        let distance = 0;
+        let speed = 2.0;
+        let stumbleTimer = 0;
+        
+        // 定数
+        const SEGMENT_WIDTH = 120;
+        const RUNNER_X = 100;
+        
+        // 棒人間
+        const runner = {
+            x: RUNNER_X,
+            animation: 0,
+            stumbleAngle: 0
+        };
+        
+        // 床セグメント
+        let floorSegments = [];
+        let cameraX = 0;
+        let isDragging = false;
+        let dragIndex = -1;
+        let lastY = 0;
+        
+        // 床初期化
+        function initFloor() {
+            floorSegments = [];
+            for (let i = 0; i < 50; i++) {
+                let height = 0;
+                // 最初の8セグメントは平ら
+                if (i >= 8) {
+                    height = (Math.random() - 0.5) * 40;
+                }
+                floorSegments.push({
+                    x: i * SEGMENT_WIDTH,
+                    height: height
+                });
+            }
+        }
+        
+        // 地面の高さ取得
+        function getFloorHeight(x) {
+            const index = Math.floor(x / SEGMENT_WIDTH);
+            if (index >= 0 && index < floorSegments.length) {
+                return floorSegments[index].height;
+            }
+            return 0;
+        }
+        
+        // タッチ処理
+        function onTouchStart(e) {
+            if (gameState !== 'playing') return;
+            e.preventDefault();
+            
+            const rect = canvas.getBoundingClientRect();
+            const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+            const y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
+            
+            // 床エリアのみ
+            if (y < canvas.height * 0.6) return;
+            
+            const worldX = x + cameraX;
+            const index = Math.floor(worldX / SEGMENT_WIDTH);
+            
+            if (index >= 0 && index < floorSegments.length) {
+                isDragging = true;
+                dragIndex = index;
+                lastY = y;
+            }
+        }
+        
+        function onTouchMove(e) {
+            if (!isDragging || gameState !== 'playing') return;
+            e.preventDefault();
+            
+            const rect = canvas.getBoundingClientRect();
+            const y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
+            
+            if (dragIndex >= 0 && dragIndex < floorSegments.length) {
+                const deltaY = y - lastY;
+                floorSegments[dragIndex].height += deltaY * 0.5;
+                floorSegments[dragIndex].height = Math.max(-50, Math.min(50, floorSegments[dragIndex].height));
+                lastY = y;
+            }
+        }
+        
+        function onTouchEnd(e) {
+            isDragging = false;
+            dragIndex = -1;
+        }
+        
+        // イベント登録
+        canvas.addEventListener('touchstart', onTouchStart, { passive: false });
+        canvas.addEventListener('mousedown', onTouchStart);
+        canvas.addEventListener('touchmove', onTouchMove, { passive: false });
+        canvas.addEventListener('mousemove', onTouchMove);
+        canvas.addEventListener('touchend', onTouchEnd);
+        canvas.addEventListener('mouseup', onTouchEnd);
+        
+        // 棒人間描画
+        function drawRunner() {
+            const screenX = runner.x - cameraX;
+            const floorY = canvas.height * 0.7 + getFloorHeight(runner.x);
+            let y = floorY - 50;
+            
+            ctx.save();
+            
+            if (gameState === 'stumbling') {
+                ctx.translate(screenX + 10, y + 25);
+                ctx.rotate(runner.stumbleAngle);
+                ctx.translate(-10, -25);
+                y = 0;
+            }
+            
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 3;
+            ctx.lineCap = 'round';
+            
+            const bounce = gameState === 'playing' ? Math.sin(runner.animation) * 2 : 0;
+            const x = gameState === 'stumbling' ? 0 : screenX;
+            
+            // 頭
+            ctx.beginPath();
+            ctx.arc(x + 10, y + 10 + bounce, 8, 0, Math.PI * 2);
+            ctx.stroke();
+            
+            // 体
+            ctx.beginPath();
+            ctx.moveTo(x + 10, y + 18 + bounce);
+            ctx.lineTo(x + 10, y + 35 + bounce);
+            ctx.stroke();
+            
+            // 腕と脚のアニメーション
+            if (gameState === 'playing') {
+                const swing = Math.sin(runner.animation * 1.5) * 8;
+                // 腕
+                ctx.beginPath();
+                ctx.moveTo(x + 10, y + 25 + bounce);
+                ctx.lineTo(x + 15 + swing, y + 30 + bounce);
+                ctx.moveTo(x + 10, y + 25 + bounce);
+                ctx.lineTo(x + 5 - swing, y + 30 + bounce);
+                ctx.stroke();
+                // 脚
+                ctx.beginPath();
+                ctx.moveTo(x + 10, y + 35 + bounce);
+                ctx.lineTo(x + 12 + swing * 0.7, y + 45 + bounce);
+                ctx.moveTo(x + 10, y + 35 + bounce);
+                ctx.lineTo(x + 8 - swing * 0.7, y + 45 + bounce);
+                ctx.stroke();
+            }
+            
+            ctx.restore();
+        }
+        
+        // 床描画
+        function drawFloor() {
+            const baseY = canvas.height * 0.7;
+            const start = Math.floor(cameraX / SEGMENT_WIDTH);
+            const end = start + Math.ceil(canvas.width / SEGMENT_WIDTH) + 2;
+            
+            for (let i = start; i < end && i < floorSegments.length; i++) {
+                if (i < 0) continue;
+                
+                const segment = floorSegments[i];
+                const x = segment.x - cameraX;
+                const y = baseY + segment.height;
+                
+                if (i === dragIndex && isDragging) {
+                    ctx.fillStyle = '#666';
+                    ctx.strokeStyle = '#333';
+                    ctx.lineWidth = 3;
+                } else {
+                    ctx.fillStyle = '#444';
+                    ctx.strokeStyle = '#222';
+                    ctx.lineWidth = 1;
+                }
+                
+                ctx.fillRect(x, y, SEGMENT_WIDTH, canvas.height - y);
+                ctx.strokeRect(x, y, SEGMENT_WIDTH, canvas.height - y);
+                
+                // 境界線
+                ctx.strokeStyle = '#888';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(x + SEGMENT_WIDTH, baseY - 50);
+                ctx.lineTo(x + SEGMENT_WIDTH, canvas.height);
+                ctx.stroke();
+            }
+        }
+        
+        // 衝突判定
+        function checkCollision() {
+            const currentHeight = getFloorHeight(runner.x);
+            const nextHeight = getFloorHeight(runner.x + SEGMENT_WIDTH);
+            return Math.abs(nextHeight - currentHeight) > 20;
+        }
+        
+        // セグメント追加
+        function addSegments() {
+            while (floorSegments.length * SEGMENT_WIDTH < cameraX + canvas.width + 500) {
+                const lastSegment = floorSegments[floorSegments.length - 1];
+                floorSegments.push({
+                    x: lastSegment.x + SEGMENT_WIDTH,
+                    height: (Math.random() - 0.5) * 40
+                });
+            }
+        }
+        
+        // ゲームループ
+        function gameLoop() {
+            if (!gameRunning) return;
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            if (gameState === 'playing') {
+                runner.x += speed;
+                cameraX = runner.x - RUNNER_X;
+                distance = Math.floor(runner.x / 10);
+                
+                // スピードアップ
+                speed = 2.0 + Math.floor(distance / 100) * 0.3;
+                
+                addSegments();
+                
+                if (checkCollision()) {
+                    gameState = 'stumbling';
+                    stumbleTimer = 0;
+                    runner.stumbleAngle = 0;
+                } else {
+                    runner.animation += 0.2;
+                }
+                
+            } else if (gameState === 'stumbling') {
+                stumbleTimer++;
+                runner.stumbleAngle += 0.05 + stumbleTimer * 0.001;
+                
+                if (stumbleTimer > 60) {
+                    gameOver();
+                    return;
+                }
+            }
+            
+            drawFloor();
+            drawRunner();
+            
+            document.getElementById('score').textContent = distance;
+            document.getElementById('speed').textContent = speed.toFixed(1);
+            
+            requestAnimationFrame(gameLoop);
+        }
+        
+        // ゲーム開始
+        function startGame() {
+            gameRunning = true;
+            gameState = 'playing';
+            distance = 0;
+            speed = 2.0;
+            runner.x = RUNNER_X;
+            runner.animation = 0;
+            runner.stumbleAngle = 0;
+            cameraX = 0;
+            stumbleTimer = 0;
+            isDragging = false;
+            dragIndex = -1;
+            
+            document.getElementById('startMenu').style.display = 'none';
+            document.getElementById('gameOverMenu').style.display = 'none';
+            
+            initFloor();
+            gameLoop();
+        }
+        
+        // ゲームオーバー
+        function gameOver() {
+            gameRunning = false;
+            gameState = 'gameOver';
+            isDragging = false;
+            dragIndex = -1;
+            document.getElementById('finalScore').textContent = distance;
+            document.getElementById('gameOverMenu').style.display = 'block';
+        }
+        
+        // リスタート
+        function restart() {
+            document.getElementById('gameOverMenu').style.display = 'none';
+            document.getElementById('startMenu').style.display = 'block';
+            gameState = 'menu';
+        }
+        
+        // 初期化
+        initFloor();
+    </script>
+</body>
+</html>
